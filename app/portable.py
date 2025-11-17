@@ -105,6 +105,14 @@ def is_cloudflare_blocked(html_text):
         "just a moment" in html_lower or
         "cf-wrapper" in html_lower))
 
+def is_medium_404_page(html_text, url):
+    """Detect if Medium returned a 404 error page"""
+    if "medium.com" not in url.lower():
+        return False
+    # Check for Medium's specific 404 indicators
+    return ("PAGE NOT FOUND" in html_text and
+            "<h2" in html_text and "404" in html_text)
+
 def bypass_paywall(url):
     if not url.startswith("http"):
         url = "https://" + url
@@ -115,6 +123,8 @@ def bypass_paywall(url):
         print("  📡 Method 1: curl_cffi with Chrome impersonation...")
         response = curl_requests.get(url, impersonate="chrome110", timeout=15, allow_redirects=True)
         if response.status_code == 200 and not is_cloudflare_blocked(response.text):
+            if is_medium_404_page(response.text, response.url):
+                raise Exception(f"Article not found (404). The URL may be invalid, deleted, or moved: {response.url}")
             print("  ✅ SUCCESS with curl_cffi!")
             return add_base_tag(response.text, response.url)
         else:
@@ -128,6 +138,8 @@ def bypass_paywall(url):
         scraper = cloudscraper.create_scraper(browser={'browser':'chrome','platform':'windows','mobile':False})
         response = scraper.get(url, timeout=15)
         if response.status_code == 200 and not is_cloudflare_blocked(response.text):
+            if is_medium_404_page(response.text, response.url):
+                raise Exception(f"Article not found (404). The URL may be invalid, deleted, or moved: {response.url}")
             print("  ✅ SUCCESS with cloudscraper!")
             return add_base_tag(response.text, response.url)
         else:
@@ -144,12 +156,18 @@ def bypass_paywall(url):
             print(f"    Trying UA {i+1}/{len(USER_AGENTS)}: {user_agent[:50]}...")
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200 and not is_cloudflare_blocked(response.text):
+                if is_medium_404_page(response.text, response.url):
+                    raise Exception(f"Article not found (404). The URL may be invalid, deleted, or moved: {response.url}")
                 print(f"    ✅ SUCCESS with user agent {i+1}!")
                 return add_base_tag(response.text, response.url)
             else:
                 print(f"    ⚠️ UA {i+1} blocked or failed")
         except Exception as e:
-            print(f"    ❌ UA {i+1} error: {str(e)[:50]}")
+            error_msg = str(e)
+            # Re-raise 404 errors to propagate them properly
+            if "404" in error_msg and "not found" in error_msg.lower():
+                raise
+            print(f"    ❌ UA {i+1} error: {error_msg[:50]}")
 
     raise Exception("All bypass methods failed. Site may have strong anti-bot protection.")
 
@@ -172,6 +190,11 @@ def show_article():
 <p><a href="/">← Go Back</a></p>
 </body></html>"""
         return error_html, 400
+
+@app.route("/favicon.ico")
+def favicon():
+    # Return 204 No Content to suppress favicon errors
+    return "", 204
 
 @app.route("/", defaults={"path":""})
 @app.route("/<path:path>", methods=["GET"])
